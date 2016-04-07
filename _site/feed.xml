@@ -6,8 +6,8 @@
 </description>
     <link>http://yancey.info/</link>
     <atom:link href="http://yancey.info/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 30 Mar 2016 09:51:07 +0800</pubDate>
-    <lastBuildDate>Wed, 30 Mar 2016 09:51:07 +0800</lastBuildDate>
+    <pubDate>Thu, 07 Apr 2016 19:45:49 +0800</pubDate>
+    <lastBuildDate>Thu, 07 Apr 2016 19:45:49 +0800</lastBuildDate>
     <generator>Jekyll v3.1.2</generator>
     
       <item>
@@ -119,8 +119,8 @@ end
 
 </description>
         <pubDate>Tue, 29 Mar 2016 17:35:21 +0800</pubDate>
-        <link>http://yancey.info/redis/2016/03/29/redis-distributed-lock.html</link>
-        <guid isPermaLink="true">http://yancey.info/redis/2016/03/29/redis-distributed-lock.html</guid>
+        <link>http://yancey.info/blog/2016/03/29/redis-distributed-lock</link>
+        <guid isPermaLink="true">http://yancey.info/blog/2016/03/29/redis-distributed-lock</guid>
         
         
         <category>redis</category>
