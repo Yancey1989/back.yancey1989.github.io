@@ -4,6 +4,9 @@ title:  "Redis Distributed Lock"
 date:   2016-03-29 17:35:21 +0800
 categories: redis
 ---
+* content
+{:toc}
+
 
 ## 1.我们先了解一下什么是分布式以及它的应用场景
 
@@ -112,5 +115,4 @@ end
 http://redis.io/topics/distlock
 
 http://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
-
 
