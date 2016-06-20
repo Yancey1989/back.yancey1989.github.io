@@ -5,9 +5,395 @@
     <description>Yancey&#39;s blog</description>
     <link>/</link>
     <atom:link href="/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 19 Apr 2016 14:09:14 +0800</pubDate>
-    <lastBuildDate>Tue, 19 Apr 2016 14:09:14 +0800</lastBuildDate>
+    <pubDate>Tue, 21 Jun 2016 00:16:08 +0800</pubDate>
+    <lastBuildDate>Tue, 21 Jun 2016 00:16:08 +0800</lastBuildDate>
     <generator>Jekyll v3.1.2</generator>
+    
+      <item>
+        <title>Kubernetes Service Network Explain</title>
+        <description>&lt;ul id=&quot;markdown-toc&quot;&gt;
+  &lt;li&gt;&lt;a href=&quot;#service&quot; id=&quot;markdown-toc-service&quot;&gt;Service&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;#clusterip--nodeport--loadbalancer&quot; id=&quot;markdown-toc-clusterip--nodeport--loadbalancer&quot;&gt;ClusterIP &amp;amp;&amp;amp; NodePort &amp;amp;&amp;amp; LoadBalancer&lt;/a&gt;    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;#clusterip&quot; id=&quot;markdown-toc-clusterip&quot;&gt;1. ClusterIP&lt;/a&gt;        &lt;ul&gt;
+          &lt;li&gt;&lt;a href=&quot;#rcreplices-count3&quot; id=&quot;markdown-toc-rcreplices-count3&quot;&gt;1.1 发布一个rc，并指定replices count为3.&lt;/a&gt;&lt;/li&gt;
+          &lt;li&gt;&lt;a href=&quot;#service1label&quot; id=&quot;markdown-toc-service1label&quot;&gt;1.2. 发布一个service，并指定步骤1中的label。&lt;/a&gt;&lt;/li&gt;
+          &lt;li&gt;&lt;a href=&quot;#iptablesnatservice&quot; id=&quot;markdown-toc-iptablesnatservice&quot;&gt;1.3. 查看iptables，观察其NAT表中的信息（只截取了部分和这个service有关的信息）&lt;/a&gt;&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#loadbalancer&quot; id=&quot;markdown-toc-loadbalancer&quot;&gt;3. LoadBalancer&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#section&quot; id=&quot;markdown-toc-section&quot;&gt;服务发现&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#section-1&quot; id=&quot;markdown-toc-section-1&quot;&gt;附录&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;service&quot;&gt;Service&lt;/h2&gt;
+&lt;p&gt;Pod的IP是在&lt;strong&gt;docker0&lt;/strong&gt;网段动态分配的，当发生重启，扩容等操作时，IP地址会随之变化。当某个Pod(frontend)需要去访问其依赖的另外一组Pod(backend)时，如果backend的IP发生变化时，如何保证fronted到backend的正常通信变的非常重要。由此，引出了Service的概念。&lt;/p&gt;
+
+&lt;p&gt;这里docker0是一个网桥，docker daemon启动container时会根据docker0的网段来划粉container的IP地址&lt;a href=&quot;https://docs.docker.com/engine/userguide/networking/dockernetworks/&quot;&gt;Docker网络&lt;/a&gt;&lt;/p&gt;
+
+&lt;p&gt;在实际生产环境中，对Service的访问可能会有两种来源：Kubernetes集群内部的程序（Pod）和Kubernetes集群外部，为了满足上述的场景，Kubernetes service有以下三种类型：&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;ClusterIP&lt;/strong&gt;:提供一个集群内部的虚拟IP以供Pod访问。&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;NodePort&lt;/strong&gt;:在每个Node上打开一个端口以供外部访问。&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;LoadBalancer&lt;/strong&gt;:通过外部的负载均衡器来访问。&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;clusterip--nodeport--loadbalancer&quot;&gt;ClusterIP &amp;amp;&amp;amp; NodePort &amp;amp;&amp;amp; LoadBalancer&lt;/h2&gt;
+
+&lt;h3 id=&quot;clusterip&quot;&gt;1. ClusterIP&lt;/h3&gt;
+
+&lt;p&gt;此模式会提供一个集群内部的虚拟IP（与Pod不在同一网段)，以供集群内部的pod之间通信使用。
+ClusterIP也是Kubernetes service的默认类型。&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;service-network.png&quot; alt=&quot;Pod-Service&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;为了实现图上的功能主要需要以下几个组件的协同工作&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;strong&gt;apiserver&lt;/strong&gt; 用户通过kubectl命令向apiserver发送创建service的命令，apiserver接收到请求以后将数据存储到etcd中。&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;kube-proxy&lt;/strong&gt; kubernetes的每个节点中都有一个叫做kube-proxy的进程，这个进程负责感知service，pod的变化，并将变化的信息写入本地的iptables中。&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;iptables&lt;/strong&gt; 使用NAT等技术将virtualIP的流量转至endpoint中。&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;下面我们实际发布一个Service，能够更清晰的了解到Service是如何工作的。&lt;/p&gt;
+
+&lt;h4 id=&quot;rcreplices-count3&quot;&gt;1.1 发布一个rc，并指定replices count为3.&lt;/h4&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;yancey@ yancey-macbook kubernetes-1$kubectl create -f rc_nginx.yaml
+yancey@ yancey-macbook kubernetes-1$kubectl get pods
+NAME                     READY     STATUS    RESTARTS   AGE
+k8s-master-core-v2-01    4/4       Running   0          8m
+k8s-proxy-core-v2-01     1/1       Running   0          8m
+nginx-controller-6bovu   1/1       Running   0          4m
+nginx-controller-iowux   1/1       Running   0          4m
+nginx-controller-o7m6u   1/1       Running   0          4m
+yancey@ yancey-macbook kubernetes-1$kubectl describe pod nginx-controller-6bovu
+Name:		nginx-controller-6bovu
+Namespace:	default
+Node:		core-v2-01/172.17.8.101
+Start Time:	Fri, 17 Jun 2016 15:22:20 +0800
+Labels:		app=nginx
+Status:		Running
+IP:		10.1.13.3
+Controllers:	ReplicationController/nginx-controller
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;h4 id=&quot;service1label&quot;&gt;1.2. 发布一个service，并指定步骤1中的label。&lt;/h4&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;yancey@ yancey-macbook kubernetes-1$kubectl create -f service_nginx.yaml
+yancey@ yancey-macbook kubernetes-1$kubectl get svc
+NAME            CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+kubernetes      10.0.0.1     &amp;lt;none&amp;gt;        443/TCP    9m
+nginx-service   10.0.0.252   &amp;lt;none&amp;gt;        8000/TCP   4m
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;kubernetes为nginx-server这个service创建了一个10.0.0.252这个ClusterIP，也可以称为VirtualIP.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;yancey@ yancey-macbook kubernetes-1$kubectl get ep
+NAME            ENDPOINTS                                AGE
+kubernetes      172.17.8.101:6443                        9m
+nginx-service   10.1.13.2:80,10.1.13.3:80,10.1.13.4:80   4m
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;查看endpoint信息，发现nginx-service一共有三个endpoint地址，分别对应nginx的三个pod。&lt;/p&gt;
+
+&lt;h4 id=&quot;iptablesnatservice&quot;&gt;1.3. 查看iptables，观察其NAT表中的信息（只截取了部分和这个service有关的信息）&lt;/h4&gt;
+&lt;p&gt;查看iptables中NAT表的命令:&lt;code class=&quot;highlighter-rouge&quot;&gt;iptables -L -v -n -t nat&lt;/code&gt;&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+   37  2766 KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */
+   33  2112 DOCKER     all  --  *      *       0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;在PREROUTING链中会先匹配到KUBE-SERVICES这个Chain。&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Chain KUBE-SERVICES (2 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 KUBE-SVC-GKN7Y2BSGW4NJTYL  tcp  --  *      *       0.0.0.0/0            10.0.0.252           /* default/nginx-service: cluster IP */ tcp dpt:8000
+   18  1080 KUBE-NODEPORTS  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service nodeports; NOTE: this must be the last rule in this chain */ ADDRTYPE match dst-type LOCAL
+
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;所有destinationIP为10.0.0.252的包都转到&lt;strong&gt;KUBE-SVC-GKN7Y2BSGW4NJTYL&lt;/strong&gt;这个Chain&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Chain KUBE-SVC-GKN7Y2BSGW4NJTYL (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 KUBE-SEP-7ROBBXFV7SD4AIRW  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/nginx-service: */ statistic mode random probability 0.33332999982
+    0     0 KUBE-SEP-XY3F6VJIZ7ELIF4Z  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/nginx-service: */ statistic mode random probability 0.50000000000
+    0     0 KUBE-SEP-JIDZHFC4A3T535AK  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/nginx-service: */
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;这里能看到请求会平均执行&lt;strong&gt;KUBE-SEP-7ROBBXFV7SD4AIRW&lt;/strong&gt;,&lt;strong&gt;KUBE-SEP-XY3F6VJIZ7ELIF4Z&lt;/strong&gt;,&lt;strong&gt;KUBE-SEP-XY3F6VJIZ7ELIF4Z&lt;/strong&gt;这三个Chain.最后我们看下&lt;strong&gt;KUBE-SEP-7ROBBXFV7SD4AIRW&lt;/strong&gt;这个Chain做了什么&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Chain KUBE-SEP-7ROBBXFV7SD4AIRW (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.1.13.2            0.0.0.0/0            /* default/nginx-service: */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/nginx-service: */ tcp to:10.1.13.2:80
+
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;这个Chain使用了DNAT规则将流量转发到10.1.13.2:80这个地址。至此从Pod发出来的流量通过本地的iptables将流量转至了service背后的pod上。
+### 2. NodePort
+Kubernetes将会在每个Node上打开一个端口并且&lt;strong&gt;每个Node的端口都是一样的&lt;/strong&gt;，通过&amp;lt;NodeIP&amp;gt;:NodePort的方式Kubernetes集群外部的程序可以访问Service。&lt;/p&gt;
+
+&lt;p&gt;修改kubernetes/service_nginx.yaml，将Service的type改为NodePort类型。&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  type: NodePort
+  ports:
+  - port: 8000 
+    targetPort: 80
+    protocol: TCP
+  # just like the selector in the replication controller,
+  # but this time it identifies the set of pods to load balance
+  # traffic to.
+  selector:
+    app: nginx
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;发布这个service，可以看到已经随机分配了一个NodePort端口。&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;yancey@ yancey-macbook kubernetes-1$kubectl get svc nginx-service -o yaml
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: 2016-06-18T03:29:42Z
+  name: nginx-service
+  namespace: default
+  resourceVersion: &quot;1405&quot;
+  selfLink: /api/v1/namespaces/default/services/nginx-service
+  uid: e50ba23a-3504-11e6-a94f-080027a75e9e
+spec:
+  clusterIP: 10.0.0.229
+  ports:
+  - nodePort: 30802
+    port: 8000
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: nginx
+  sessionAffinity: None
+  type: NodePort
+status:
+  loadBalancer: {}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;p&gt;观察Iptables中的变化，KUBE-NODEPORTS这个Chain中增加了如下内容&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Chain KUBE-NODEPORTS (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/nginx-service: */ tcp dpt:30802
+    0     0 KUBE-SVC-GKN7Y2BSGW4NJTYL  tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/nginx-service: */ tcp dpt:30802
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;可以看到流量会转至KUBE-SVC-GKN7Y2BSGW4NJTYL这个Chain中处理一次，也就是ClusterIP中提到的通过负载均衡将流量平均分配到3个endpoint上。&lt;/p&gt;
+
+&lt;h3 id=&quot;loadbalancer&quot;&gt;3. LoadBalancer&lt;/h3&gt;
+&lt;p&gt;待补充。&lt;/p&gt;
+
+&lt;h3 id=&quot;section&quot;&gt;服务发现&lt;/h3&gt;
+&lt;p&gt;当发布一个服务之后，我们要使用这个服务，第一个问题就是要拿到这些服务的IP和PORT，kubernetes提供两种方式以便在程序中去动态的获取这些信息。&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;ENV环境变量
+在Pod其中之后，kubernetes会将现有服务的IP，PORT以环境变量的方式写入pod中，程序只要读取这些环境变量即可。&lt;/li&gt;
+  &lt;li&gt;DNS，程序中可以使用server的名称对服务进行访问，在程序启时候，不必预先读取环境变量中的内容。&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;这是两种方式的详细说明：&lt;a href=&quot;http://kubernetes.io/docs/user-guide/services/#discovering-services&quot;&gt;http://kubernetes.io/docs/user-guide/services/#discovering-services&lt;/a&gt;&lt;/p&gt;
+
+&lt;h3 id=&quot;section-1&quot;&gt;附录&lt;/h3&gt;
+&lt;ol&gt;
+  &lt;li&gt;&lt;a href=&quot;https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/4/html/Security_Guide/s1-fireall-ipt-act.html#s2-firewall-policies&quot;&gt;iptables文档&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;http://kubernetes.io/docs/user-guide/debugging-services/&quot;&gt;Debuging Service&lt;/a&gt;&lt;/li&gt;
+&lt;/ol&gt;
+</description>
+        <pubDate>Tue, 21 Jun 2016 00:09:00 +0800</pubDate>
+        <link>/blog/2016/06/21/k8s-service-network</link>
+        <guid isPermaLink="true">/blog/2016/06/21/k8s-service-network</guid>
+        
+        
+        <category>k8s</category>
+        
+      </item>
+    
+      <item>
+        <title>Linux IO多路复用</title>
+        <description>&lt;ul id=&quot;markdown-toc&quot;&gt;
+  &lt;li&gt;&lt;a href=&quot;#ioselectpollepoll&quot; id=&quot;markdown-toc-ioselectpollepoll&quot;&gt;IO多路复用之select，poll，epoll对比&lt;/a&gt;    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;#poll&quot; id=&quot;markdown-toc-poll&quot;&gt;2. poll&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#epoll&quot; id=&quot;markdown-toc-epoll&quot;&gt;3. epoll&lt;/a&gt;        &lt;ul&gt;
+          &lt;li&gt;&lt;a href=&quot;#level-triggeredlt&quot; id=&quot;markdown-toc-level-triggeredlt&quot;&gt;3.1 水平触发(Level-triggered，LT)&lt;/a&gt;&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#section&quot; id=&quot;markdown-toc-section&quot;&gt;4. 总结&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;ioselectpollepoll&quot;&gt;IO多路复用之select，poll，epoll对比&lt;/h2&gt;
+&lt;p&gt;### 1. select
+* 受限于文件打开数，FD_SETSIZE来控制，通过cat /proc/sys/fs/file-max来查看
+* 对socket列表轮询，如果就绪socket很少，会造成大量的浪费。&lt;/p&gt;
+
+&lt;h3 id=&quot;poll&quot;&gt;2. poll&lt;/h3&gt;
+&lt;ul&gt;
+  &lt;li&gt;从select升级而来，链表存储，理论上支持的连接数无上限。&lt;/li&gt;
+  &lt;li&gt;“水平触发”机制,如果报了fd没有被处理，下次会继续报告此fd。&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;epoll&quot;&gt;3. epoll&lt;/h3&gt;
+&lt;ul&gt;
+  &lt;li&gt;没有fd数量限制&lt;/li&gt;
+  &lt;li&gt;存储在内核的事件表中，基于fd的callback。&lt;/li&gt;
+  &lt;li&gt;支持”水平触发”，”边缘触发”&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h4 id=&quot;level-triggeredlt&quot;&gt;3.1 水平触发(Level-triggered，LT)&lt;/h4&gt;
+&lt;p&gt;内核会通知fd是否就绪，如果不处理则下次会继续通知。
+#### 3.2 边缘触发(edge-triggered，ET)
+只支持no-block socket，当fd就绪时内核会通知进程，并且只会通知一次，是一种高效的处理方式。&lt;/p&gt;
+
+&lt;h3 id=&quot;section&quot;&gt;4. 总结&lt;/h3&gt;
+&lt;ul&gt;
+  &lt;li&gt;通常情况下epoll性能会好一些，但如果在大量活跃连接情况下，epoll由于存在大量回调，性能未必会比select或poll差。&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;table&gt;
+  &lt;thead&gt;
+    &lt;tr&gt;
+      &lt;th&gt; &lt;/th&gt;
+      &lt;th&gt;最大连接数&lt;/th&gt;
+      &lt;th&gt;fd增加后的性能问题&lt;/th&gt;
+      &lt;th&gt;消息传递&lt;/th&gt;
+    &lt;/tr&gt;
+  &lt;/thead&gt;
+  &lt;tbody&gt;
+    &lt;tr&gt;
+      &lt;td&gt;select&lt;/td&gt;
+      &lt;td&gt;受限于最大fd打开数，FD_SETSIZE&lt;/td&gt;
+      &lt;td&gt;遍历方式，fd打开数增加会导致性能下降&lt;/td&gt;
+      &lt;td&gt;内核到用户空间的拷贝&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;poll&lt;/td&gt;
+      &lt;td&gt;基于链表，理论上无最大fd打开数的限制&lt;/td&gt;
+      &lt;td&gt;同上&lt;/td&gt;
+      &lt;td&gt;同上&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;epoll&lt;/td&gt;
+      &lt;td&gt;很大，1G内存可以打开10w左右连接&lt;/td&gt;
+      &lt;td&gt;基于fd的callback实现，活跃的fd才会调用callback，活跃少的情况下无性能问题&lt;/td&gt;
+      &lt;td&gt;基于mmap实现，共享一块内存&lt;/td&gt;
+    &lt;/tr&gt;
+  &lt;/tbody&gt;
+&lt;/table&gt;
+</description>
+        <pubDate>Mon, 02 May 2016 01:07:00 +0800</pubDate>
+        <link>/blog/2016/05/02/linux-io</link>
+        <guid isPermaLink="true">/blog/2016/05/02/linux-io</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>【Linux学习笔记】之进程管理</title>
+        <description>&lt;ul id=&quot;markdown-toc&quot;&gt;
+  &lt;li&gt;&lt;a href=&quot;#section&quot; id=&quot;markdown-toc-section&quot;&gt;1. 进程地址空间：虚拟地址空间&lt;/a&gt;    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;#namespace&quot; id=&quot;markdown-toc-namespace&quot;&gt;1.2 namespace:&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#namespace-1&quot; id=&quot;markdown-toc-namespace-1&quot;&gt;1.3 6种namespace:&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#section-1&quot; id=&quot;markdown-toc-section-1&quot;&gt;1.4 进程的复制：&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;#cow&quot; id=&quot;markdown-toc-cow&quot;&gt;1.5 COW技术：&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;#section-2&quot; id=&quot;markdown-toc-section-2&quot;&gt;2. 进程调度&lt;/a&gt;    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;#section-3&quot; id=&quot;markdown-toc-section-3&quot;&gt;2.1 完全公平调度器&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;section&quot;&gt;1. 进程地址空间：虚拟地址空间&lt;/h2&gt;
+&lt;p&gt;与实际物理地址无关。虚拟地址空间分为：内核空间+用户空间（TASK_SIZE）&lt;/p&gt;
+
+&lt;p&gt;使用页表为物理地址分配虚拟地址，内核负责将虚拟地址空间映射到物理地址空间，所以内核决定了哪些可以共享，哪些不可以共享。
+使用的模型：多级分页&lt;/p&gt;
+
+&lt;p&gt;物理内存的分配:&lt;strong&gt;伙伴系统&lt;/strong&gt;,目的：快速检测连续区域&lt;/p&gt;
+
+&lt;p&gt;进程的生命周期：运行、等待、睡眠&lt;/p&gt;
+
+&lt;p&gt;查看限制信息：cat /proc/self/limits&lt;/p&gt;
+
+&lt;p&gt;进程的两种启动方式：&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;fork：当前进程的一个副本&lt;/li&gt;
+  &lt;li&gt;exec：从一个可执行的二进制文件加载另一个app&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;线程的启动方式：&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;clone：功能强大，可以控制子进程与父进程的数据共享粒度。可以创建线程，可以使用独立的namespace&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;namespace&quot;&gt;1.2 namespace:&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;通过fork或clone可以控制是否与父进程共享命名空间&lt;/li&gt;
+  &lt;li&gt;通过unshare将进程某些部分从父进程分离，包括namespace&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;namespace-1&quot;&gt;1.3 6种namespace:&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;UTS(Unix Timesharing System,主机名),IPC（进程通信），PID（chroot进程树），NS（挂载点），NET（网络），USER&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;section-1&quot;&gt;1.4 进程的复制：&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;fork:完整副本，COW技术&lt;/li&gt;
+  &lt;li&gt;vfork:父子进程共享数据（由于fork的cow技术，vfork不被广泛采用）&lt;/li&gt;
+  &lt;li&gt;clone：产生线程，可以对父子进程之间的共享、复制进行精确控制。&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;cow&quot;&gt;1.5 COW技术：&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;执行fork时只负责其页表，而不是复制整个地址空间&lt;/li&gt;
+  &lt;li&gt;涉及写操作的部分，会新申请空间，更新页表&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;section-2&quot;&gt;2. 进程调度&lt;/h2&gt;
+
+&lt;h3 id=&quot;section-3&quot;&gt;2.1 完全公平调度器&lt;/h3&gt;
+&lt;ul&gt;
+  &lt;li&gt;虚拟时钟，完全公平调度器依赖虚拟时钟，度量等待进程在完全公平系统中所能得到的CPU时间。虚拟时钟的实现方法是根据现实的时钟以及负载情况推算出来的。&lt;/li&gt;
+  &lt;li&gt;实现方式：基于红黑树，vruntime作为key，每次选择最左端节点来执行&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Thu, 14 Apr 2016 01:15:00 +0800</pubDate>
+        <link>/blog/2016/04/14/linux-kernal-process-manage</link>
+        <guid isPermaLink="true">/blog/2016/04/14/linux-kernal-process-manage</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
     
       <item>
         <title>Redis Distributed Lock</title>
