@@ -8,9 +8,11 @@ permalink: /about/
 * content
 {:toc}
 
-### 感兴趣的领域:
+#### 感兴趣的领域:
 
-分布式系统，内存数据库，JVM，Python，C++
+分布式系统, 内存数据库, JVM, Python, C++, Kubernetes
 
-### 我的邮箱:[yancey0623@163.com](yancey0623@163.com) 欢迎交流
+#### 联系方式
+
+* Email:[yancey1989@gmail.com](yancey1989@gmail.com) 欢迎交流
 
