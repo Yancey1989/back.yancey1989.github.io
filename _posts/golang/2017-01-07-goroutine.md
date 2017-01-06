@@ -1,3 +1,12 @@
+---
+layout: post
+title:  "Goroutine Design"
+date:   2017-01-07 00:50:20 +0800
+categories: golang
+---
+* content
+{:toc}
+
 # 为什么Golang需要单独开发一个Goroutine？
 
 - 开销问题：
