@@ -1,6 +1,6 @@
 # Site settings
 title: Yancey's Personal Website
-email: yancey0623@163.com
+email: yancey1989@gmail.com 
 description: Yancey's blog
 # > # this means to ignore newlines until "baseurl:"
 #   Write an awesome description for your new site here. You can edit this
@@ -22,7 +22,7 @@ duoshuo_shortname: yancey0623
 duoshuo_url: "http://yancey0623.duoshuo.com"
 # disqus.com commenting system. please note that it is exclusive with duoshuo.com
 #disqus_shortname: lixizhi
-#disqus_url: "http://yancey.info"
+#disqus_url: "http://yancey1989/github.io"
 #########################################
 
 # Build settings
